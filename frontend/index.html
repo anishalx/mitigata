@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MITIGATA · Hunt console</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">M</span>
+      <div>
+        <strong>MITIGATA</strong>
+        <small>scope-guarded pentest flow · PTES</small>
+      </div>
+    </div>
+    <div class="chips" id="chips" aria-live="polite"></div>
+    <div class="top-actions">
+      <label class="field-inline">Run
+        <select id="run-select" aria-label="Select run"></select>
+      </label>
+    </div>
+  </header>
+
+  <div class="notice" id="notice" role="status" hidden></div>
+
+  <main class="layout">
+    <section class="flow" aria-label="Scan flow">
+
+      <!-- 1. Discover alive hosts -->
+      <article class="stage kickoff" id="stage-discover">
+        <header class="stage-head">
+          <span class="stage-num">1</span>
+          <h2>Discover alive hosts</h2>
+          <span class="tag tag-pre">scope + nmap host discovery</span>
+        </header>
+        <p class="muted small">Scans the authorised range for live hosts and their top TCP ports. Nothing deeper runs until you pick an IP.</p>
+        <form id="discover-form" class="kickoff-form" autocomplete="off">
+          <div class="row">
+            <label>Top ports per host
+              <select id="top-ports-input">
+                <option value="100" selected>100 (fast)</option>
+                <option value="1000">1000 (slower)</option>
+              </select>
+            </label>
+            <label>Budget
+              <select id="discover-deadline-input">
+                <option value="600" selected>10 min</option>
+                <option value="900">15 min</option>
+              </select>
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit" class="primary" id="discover-btn">Discover alive hosts</button>
+            <span class="muted small" id="discover-hint"></span>
+          </div>
+        </form>
+      </article>
+      <div class="connector" aria-hidden="true"></div>
+
+      <!-- 2. Choose the target IP -->
+      <article class="stage target" id="stage-target">
+        <header class="stage-head">
+          <span class="stage-num">2</span>
+          <h2>Choose a target IP</h2>
+          <span class="tag tag-expl">nmap · crawl · fuzz · binaries · credentials</span>
+        </header>
+        <p class="muted small">Pick a live host from the discovery run. Checks run according to the active scope and time budget.</p>
+        <div class="alive-list" id="alive-list"></div>
+        <form id="target-form" class="kickoff-form" autocomplete="off">
+          <label>Target IP
+            <input id="target-ip" type="text" placeholder="192.168.60.139" spellcheck="false" inputmode="decimal">
+          </label>
+          <div class="row">
+            <label class="check"><input id="fuzz-input" type="checkbox" checked> Endpoint fuzzing</label>
+            <label class="check"><input id="external-input" type="checkbox" checked> Use katana / ffuf when installed</label>
+            <label class="check"><input id="full-scan-input" type="checkbox" checked> Full 65k sweep</label>
+            <label>Budget
+              <select id="target-deadline-input">
+                <option value="1500" selected>25 min</option>
+                <option value="900">15 min</option>
+                <option value="2400">40 min</option>
+              </select>
+            </label>
+          </div>
+          <div class="row">
+            <label>Explicit ports (optional)
+              <input id="target-ports-input" type="text" placeholder="80,1111,8833" spellcheck="false">
+            </label>
+            <label>Extra auth hosts (optional)
+              <input id="target-auth-input" type="text" placeholder="192.168.60.16, 192.168.60.226" spellcheck="false">
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit" class="primary" id="target-btn" disabled>Scan this IP</button>
+            <span class="muted small" id="target-hint"></span>
+          </div>
+        </form>
+      </article>
+      <div class="connector" aria-hidden="true"></div>
+
+      <!-- 3. Scope guard -->
+      <article class="stage guard" id="stage-guard">
+        <header class="stage-head">
+          <span class="stage-num">3</span>
+          <h2>Scope guard &amp; firewall</h2>
+          <span class="tag tag-pre">pre-engagement</span>
+        </header>
+        <div class="kv" id="guard-kv"></div>
+      </article>
+      <div class="connector" aria-hidden="true"></div>
+
+      <!-- 4. Orchestrator -->
+      <article class="stage orchestrator" id="stage-orch">
+        <header class="stage-head">
+          <span class="stage-num">4</span>
+          <h2>Orchestrator</h2>
+          <span class="tag tag-intel" id="phase-tag">waiting</span>
+        </header>
+        <ol class="stepper" id="stepper"></ol>
+        <div class="deadline">
+          <div class="bar"><div class="fill" id="deadline-fill"></div></div>
+          <small class="muted" id="deadline-text"></small>
+        </div>
+      </article>
+
+      <div class="fanout" aria-hidden="true"><span></span></div>
+
+      <!-- 5. Agents and tools -->
+      <div class="agents" id="agents">
+        <article class="agent discovery" data-agent="discovery-agent">
+          <h3>Discovery agent</h3><p class="tools">nmap · host discovery · top ports · full range</p>
+          <div class="agent-body"></div>
+        </article>
+        <article class="agent network" data-agent="network-agent">
+          <h3>Network agent</h3><p class="tools">nmap versions · banner read · service checks</p>
+          <div class="agent-body"></div>
+        </article>
+        <article class="agent web" data-agent="web-agent">
+          <h3>Web agent</h3><p class="tools">katana or built-in crawl · ffuf or built-in fuzz · forms</p>
+          <div class="agent-body"></div>
+        </article>
+        <article class="agent binary" data-agent="binary-agent">
+          <h3>Binary agent</h3><p class="tools">radare2 disassembly &amp; strings · ELF triage</p>
+          <div class="agent-body"></div>
+        </article>
+      </div>
+      <div class="fanout fanin" aria-hidden="true"><span></span></div>
+
+      <!-- Tools -->
+      <article class="stage tools-card" id="stage-tools">
+        <header class="stage-head">
+          <span class="stage-num">T</span>
+          <h2>Tools</h2>
+          <span class="tag tag-intel" id="tools-summary"></span>
+        </header>
+        <div id="tools-list"></div>
+      </article>
+      <div class="connector" aria-hidden="true"></div>
+
+      <!-- 6. Blackboard -->
+      <article class="stage blackboard" id="stage-board">
+        <header class="stage-head">
+          <span class="stage-num">5</span>
+          <h2>Shared blackboard</h2>
+          <span class="tag tag-intel">SQLite · single writer</span>
+        </header>
+        <div class="board-grid">
+          <section class="panel"><h4>Hosts &amp; ports</h4><div id="board-hosts"></div></section>
+          <section class="panel"><h4>Endpoints</h4><div id="board-endpoints"></div></section>
+          <section class="panel"><h4>Binaries &amp; decompile</h4><div id="board-binaries"></div></section>
+          <section class="panel wide"><h4>Discovery chain <small>(each step was caused by the step above it)</small></h4><div id="board-lineage"></div></section>
+          <section class="panel"><h4>Extracted creds <small>(references only)</small></h4><div id="board-creds"></div></section>
+          <section class="panel wide"><h4>Findings <span class="chip cand">[CANDIDATE]</span></h4><div id="board-findings"></div></section>
+        </div>
+      </article>
+      <div class="connector" aria-hidden="true"></div>
+
+      <!-- 7. Verification -->
+      <article class="stage verifier" id="stage-verify">
+        <header class="stage-head">
+          <span class="stage-num">6</span>
+          <h2>Verification agent</h2>
+          <span class="tag tag-expl">exploitation</span>
+        </header>
+        <p class="muted small">Tries the recovered credentials against the IP's endpoints, with a control request each time. Each lead ends CONFIRMED, REJECTED or INCONCLUSIVE.</p>
+        <div id="verify-list"></div>
+      </article>
+      <div class="connector" aria-hidden="true"></div>
+
+      <!-- 8. Attack path & report -->
+      <article class="stage report" id="stage-report">
+        <header class="stage-head">
+          <span class="stage-num">7</span>
+          <h2>Attack path &amp; report engine</h2>
+          <span class="tag tag-report">threat modelling · reporting</span>
+        </header>
+        <div id="path-list"></div>
+        <div class="downloads" id="downloads"></div>
+        <details>
+          <summary>Mermaid source</summary>
+          <pre id="mermaid" class="mono"></pre>
+        </details>
+      </article>
+    </section>
+
+    <aside class="side">
+      <section class="card">
+        <h3>Live timeline</h3>
+        <ol class="timeline" id="timeline"></ol>
+      </section>
+      <section class="card">
+        <h3>Coverage &amp; gaps</h3>
+        <div id="coverage"></div>
+        <h4>Gaps</h4>
+        <ul class="list" id="gaps"></ul>
+        <h4>Limitations</h4>
+        <ul class="list" id="limitations"></ul>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="footer">
+    Loopback only. Credential values, default passwords and flag values are never shown here.
+    Run data lives in <code>runs/&lt;run-id&gt;/</code>.
+  </footer>
+</body>
+</html>

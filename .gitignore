@@ -1,0 +1,28 @@
+.venv/
+__pycache__/
+*.py[cod]
+runs/
+runs-*/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Organiser-supplied artifacts and run data: never published.
+binaries/*
+!binaries/.gitkeep
+*.db
+*.db-wal
+*.db-shm
+secrets.json
+.engagement-key
+literals.json
+
+# Local manifests (copy scope.example.yaml) and secrets.
+scope.yaml
+scope-*.yaml
+.env
+.env.*
+!.env.example
+*.log

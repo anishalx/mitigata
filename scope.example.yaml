@@ -1,0 +1,66 @@
+# MITIGATA scope manifest example; replace placeholders and set a current,
+# explicitly authorised window before running (the dated one below is illustrative).
+# The compiler and run record retain a hash of the compiled scope.
+# Out-of-scope traffic is a hard failure. Do not add public ranges unless
+# explicitly authorised.
+
+engagement:
+  name: "lab-2026"
+  tier: "breach"                   # recon | breach | deep; Deep chaining is optional/bonus
+  authorised_by: "Organiser name / RoE reference"
+  window: "2026-10-31T10:00:00Z/2026-10-31T12:00:00Z"
+  description: "Hidden lab network, PTES end-to-end run"
+
+scope:
+  ipv4:
+    - "10.10.5.0/24"
+  ipv6: []                         # leave empty to block all IPv6 egress
+  domains: []                      # explicit FQDNs only, e.g. ["app.lab.local"]
+                                   # each must resolve inside authorised IP CIDRs; no wildcards
+                                   # domain-only scope is unsupported in v1
+  exclude:
+    - "10.10.5.1"                  # gateway
+    - "10.10.5.255"                # broadcast address of 10.10.5.0/24
+  binaries:
+    - "./binaries/*"
+  allow_public: false              # only with explicit written RoE authorization
+  dns_resolver: "10.10.5.53"       # must be in authorised CIDRs and not excluded; otherwise pin names offline
+
+limits:
+  # All limits apply across all workers in a run, not per worker/container.
+  max_rate_pps: 5000              # global packet/s cap, including concurrent scanners
+  max_concurrent_hosts: 16        # global host concurrency
+  max_http_rps_per_host: 20       # combined HTTP requests to each host
+  max_auth_attempts_per_account: 5 # combined attempts; requires explicit RoE permission
+  max_payload_bytes: 1048576
+  destructive: false              # never enable irreversible actions by default
+
+checks:
+  # Proposed check packs. Authentication tests, uploads, state changes and
+  # any reversible impact proof require separate explicit RoE authorization;
+  # no credentials or tokens belong in this file (use secret references).
+  include:
+    - "network.*"
+    - "web.*"
+    - "binary.*"
+  exclude:
+    - "*.dos"
+    - "*.brute_force"
+    - "*.fuzz"
+
+flags:
+  # Add the organiser-provided pattern at kickoff.
+  patterns:
+    - 'flag\{[^}]+\}'
+    - 'CTF\{[^}]+\}'
+    - 'HTB\{[^}]+\}'
+
+crown_jewel:
+  # Optional bonus; identification and any access must be explicitly in scope.
+  hosts: []
+  services: []
+
+report:
+  formats: ["md", "html", "json"]
+  redact_secrets: true
+  include_flags: false             # true only for the private/organiser copy

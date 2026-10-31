@@ -1,0 +1,26 @@
+# Run the dashboard locally:   docker compose up --build      then open http://127.0.0.1:8765/
+#
+# Before the first run, create the folders the container writes to (or let Docker create them as root):
+#   mkdir -p runs binaries
+# The container runs as HOST_UID:HOST_GID so the files it writes in ./runs belong to you.
+#
+# Networking: host mode keeps the dashboard on the host's loopback (127.0.0.1 only) and lets the scanner reach the
+# lab network. It works on Linux. On Docker Desktop, use the bridge variant described in the README.
+services:
+  mitigata:
+    build:
+      context: .
+      args:
+        WITH_SOLVER: "${WITH_SOLVER:-1}"
+    image: mitigata:local
+    network_mode: host
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      # Passed through from your shell or .env. Never written into the image.
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+    volumes:
+      - ./runs:/data/runs
+      - ./binaries:/data/binaries:ro
+      - "${SCOPE_FILE:-./scope-hackathon.yaml}:/data/scope.yaml:ro"
+    command: ["serve", "--host", "127.0.0.1", "--scope", "/data/scope.yaml", "--out", "/data/runs", "--port", "8765"]
+    restart: "no"

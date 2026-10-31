@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MITIGATA report — {{ run.engagement }}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.5rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #8884; padding-bottom: .25rem; }
+  table { border-collapse: collapse; width: 100%; margin: .5rem 0 1rem; }
+  th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #8883; vertical-align: top; }
+  code { font-size: .85em; }
+  .meta { color: #888; }
+  .warn { border-left: 3px solid #c90; padding-left: .75rem; }
+</style>
+</head>
+<body>
+<h1>MITIGATA report — {{ run.engagement }}</h1>
+<p class="meta">{{ build }}</p>
+
+<h2>Run</h2>
+<table>
+  <tr><th>Run</th><td><code>{{ run.id }}</code></td></tr>
+  <tr><th>Tier</th><td>{{ run.tier }}</td></tr>
+  <tr><th>Status</th><td>{{ run.status }}</td></tr>
+  <tr><th>Started</th><td>{{ run.started_at }}</td></tr>
+  <tr><th>Finished</th><td>{{ run.finished_at or "in progress" }}</td></tr>
+  <tr><th>Scope hash</th><td><code>{{ run.scope_hash }}</code></td></tr>
+  <tr><th>Manifest hash</th><td><code>{{ run.manifest_sha256 }}</code></td></tr>
+  <tr><th>Egress enforcement</th><td>{{ run.enforcement }}</td></tr>
+</table>
+
+<h2>Summary</h2>
+<table>
+  <tr><th>Confirmed findings</th><td>{{ counts.confirmed }}</td></tr>
+  <tr><th>Candidates (appendix)</th><td>{{ counts.candidates }}</td></tr>
+  <tr><th>Inconclusive</th><td>{{ counts.inconclusive }}</td></tr>
+  <tr><th>Validations / evidence records</th><td>{{ counts.validations }}</td></tr>
+  <tr><th>Assets / services / endpoints</th><td>{{ counts.assets }} / {{ counts.services }} / {{ counts.endpoints }}</td></tr>
+  <tr><th>Binaries inventoried</th><td>{{ counts.binaries }}</td></tr>
+  <tr><th>Blackboard events</th><td>{{ counts.events }}</td></tr>
+  <tr><th>Strays sent outside scope</th><td>{{ counts.scope_events }}</td></tr>
+</table>
+<p>Confirmed findings require a class-appropriate oracle, a control comparison and retained evidence. Nothing here is inferred from a tool banner.</p>
+
+<h2>Scope</h2>
+{% if scope %}
+<table>
+  <tr><th>Allowed ranges</th><td>{{ scope.allowlist | join(", ") or "none" }}</td></tr>
+  <tr><th>Excluded</th><td>{{ scope.exclude | join(", ") or "none" }}</td></tr>
+  <tr><th>IPv6</th><td>{{ "blocked" if scope.block_ipv6 else "allowed per range" }}</td></tr>
+  <tr><th>Public ranges authorised</th><td>{{ scope.allow_public }}</td></tr>
+  <tr><th>Pinned DNS resolver</th><td>{{ scope.dns_resolver or "none (offline pinning)" }}</td></tr>
+  <tr><th>Enforcement</th><td>{{ scope.profile }} ({{ scope.enforcement }})</td></tr>
+</table>
+{% else %}
+<p class="warn">No compiled scope event recorded; treat this run as refused.</p>
+{% endif %}
+
+{% if assessment %}
+<h2>Assessment budget</h2>
+<table>
+  <tr><th>Hosts scanned / planned</th><td>{{ assessment.hosts_scanned }} / {{ assessment.hosts_planned }}{% if assessment.host_cap_reached %} (host cap reached){% endif %}</td></tr>
+  <tr><th>Ports per host / web origins</th><td>{{ assessment.ports_per_host }} / {{ assessment.web_services }}</td></tr>
+  <tr><th>Binary artifacts analysed</th><td>{{ assessment.binaries_analyzed or 0 }}</td></tr>
+</table>
+{% endif %}
+
+<h2>Coverage</h2>
+{% if coverage %}
+<table>
+  <tr><th>Attack class</th><th>Asset</th><th>State</th><th>Reason</th></tr>
+  {% for row in coverage %}
+  <tr><td>{{ row.attack_class }}</td><td>{{ row.asset_id }}</td><td>{{ row.state }}</td><td>{{ row.reason }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No asset × attack-class checks were scheduled or completed.</p>
+{% endif %}
+{% if untested_classes %}
+<p class="warn">Untested rows: {{ untested_classes | join(", ") }}. These rows did not complete and make no coverage claim.</p>
+{% endif %}
+<p class="warn">Out-of-model classes: authentication, authorisation/IDOR, injection, SSRF, deserialisation, business logic and exploitation are not implemented. Their absence is not a clean result.</p>
+
+<h2>Confirmed findings</h2>
+{% if confirmed %}
+{% for finding in confirmed %}
+<h3>{{ finding.vuln_class }} — {{ finding.claim or "unlabelled" }}</h3>
+<table>
+  <tr><th>State</th><td>{{ finding.state }}</td></tr>
+  <tr><th>Oracle</th><td>{{ finding.validation.oracle if finding.validation else "unrecorded" }} (control: {{ finding.validation.control_kind if finding.validation else "unrecorded" }})</td></tr>
+  <tr><th>Evidence</th><td><code>{{ finding.evidence.path if finding.evidence else "not retained" }}</code> sha256 <code>{{ finding.evidence.sha256 if finding.evidence else "unrecorded" }}</code></td></tr>
+</table>
+<p>Confirmed only as stated in the claim; escalation was not attempted.</p>
+{% endfor %}
+{% else %}
+<p>None. No candidate reached <code>validation.passed</code> in this run.</p>
+{% endif %}
+
+<h2>Appendix A — candidates and unverified leads</h2>
+{% if appendix %}
+<table>
+  <tr><th>Vuln class</th><th>State</th><th>Claim</th></tr>
+  {% for row in appendix %}
+  <tr><td>{{ row.vuln_class }}</td><td>{{ row.state }}</td><td>{{ row.claim }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No unconfirmed candidates were created.</p>
+{% endif %}
+
+<h2>Appendix B — binary inventory</h2>
+{% if binaries %}
+<table>
+  <tr><th>Path</th><th>SHA-256</th><th>Size</th><th>Format</th><th>State</th></tr>
+  {% for row in binaries %}
+  <tr><td><code>{{ row.path }}</code></td><td><code>{{ row.sha256 }}</code></td><td>{{ row.size }}</td><td>{{ row.format }}</td><td>{{ row.state }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No binaries were supplied to this run.</p>
+{% endif %}
+
+<h2>Appendix C — reproducibility and limitations</h2>
+<table>
+  <tr><th>Tool versions</th><td>{{ "recorded" if tool_versions else "unavailable (no tools/versions.json)" }}</td></tr>
+  <tr><th>Tasks</th><td>{{ task_states }}</td></tr>
+</table>
+<p>{{ limitations }}</p>
+<p>Workers: preflight and reporter (orchestrator); network TCP connect and web GET inventory (namespace-isolated, unprivileged); binary static strings (offline). Binary results are printable-string heuristics and never reported as credentials.</p>
+
+</body>
+</html>
