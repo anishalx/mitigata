@@ -238,3 +238,15 @@ pre { background: #0f172a; color: #e2e8f0; padding: 10px; border-radius: 8px; ov
 .tools-card { border-top: 4px solid #64748b; }
 .panel.wide { grid-column: 1 / -1; }
 .board-grid .panel { min-width: 0; }
+
+/* Binary agent output: one card per binary, with the analysis details and expandable output. */
+.binary-card { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 8px 0; min-width: 0; }
+.binary-card h5 { margin: 0 0 6px; font-size: 14px; }
+.binary-card ul { margin: 4px 0 6px 18px; padding: 0; }
+.binary-card details { margin-top: 6px; }
+.binary-card summary { cursor: pointer; font-size: 13px; }
+
+/* Delete a past run: a clearly separate, destructive control. */
+.danger-btn { border: 1px solid #b91c1c; color: #b91c1c; background: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.danger-btn:hover:not(:disabled) { background: #fef2f2; }
+.danger-btn:disabled { opacity: .45; cursor: not-allowed; }

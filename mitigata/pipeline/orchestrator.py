@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, TypeVar
 
 from ..assessment import DEFAULT_PORTS, allowed_hosts, parse_ports
+from ..discovery import filter_scope
 from ..config import load_manifest, manifest_hash
 from ..dedup import candidate as candidate_key
 from ..models import CoverageRow, Event, ScopeManifest, TaskRecord, utcnow
@@ -141,6 +142,8 @@ class HuntOptions:
     run_id: str | None = None
     fuzz: bool = True
     external_tools: bool = True
+    #: Addresses the user chose for discovery (already checked against the manifest). Empty means the manifest scope.
+    targets: list[str] = field(default_factory=list)
 
 
 def _prepare(options: HuntOptions) -> tuple[Path, ScopeManifest, bytes, CompiledScope, ScopeGuard]:
@@ -508,7 +511,11 @@ class _Hunt:
 
     def stage_scope(self) -> None:
         with self.stage("scope-guard", "pre_engagement"):
-            self.hosts_all, truncated = allowed_hosts(self.scope, self.opt.max_hosts)
+            if self.opt.targets:  # the user's range, checked against the manifest before the run started
+                self.hosts_all = filter_scope(self.scope, self.opt.targets)
+                truncated = False
+            else:
+                self.hosts_all, truncated = allowed_hosts(self.scope, self.opt.max_hosts)
             if truncated:
                 self.gaps.append(f"host cap {self.opt.max_hosts} reached; addresses beyond it were not discovered")
             self.event("scope-guard", "scope.validated", {
@@ -869,6 +876,7 @@ class _Hunt:
         return {
             "name": result.get("name", ""),
             "source": source,
+            "sources": [source],
             "protections": result.get("protections") or {},
             "unsafe_imports": list(result.get("unsafe_imports") or [])[:20],
             "literal_count": len(literals),
@@ -1578,6 +1586,7 @@ class _Hunt:
             "SELECT 1 FROM binaries WHERE run_id=? AND sha256=?", (self.run_id, sha)).fetchone()
         if already is not None:
             # The same bytes can arrive twice (supplied copy and web download); analyse them once.
+            self.store.add_binary_source(self.run_id, sha, source)  # the web copy is kept as a source, not dropped
             self.event("binary-agent", "binary.duplicate", {"sha256": sha, "source": source}, "vulnerability_analysis")
             return
         self.store.upsert_binary(self.run_id, sha, result.get("source_path") or "", int(result["size"]),

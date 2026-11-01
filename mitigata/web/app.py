@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import re
+import shutil
 import secrets
 import sqlite3
 import threading
@@ -25,6 +27,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from pydantic import BaseModel, Field, field_validator
 
 from ..config import ConfigError, load_manifest
+from ..discovery import resolve_range
+from ..pipeline import engagement
 from ..models import utcnow
 from ..pipeline import HuntOptions, HuntRefused, run_hunt
 from ..pipeline import tools as pipeline_tools
@@ -85,6 +89,13 @@ class HuntRequest(BaseModel):
 class DiscoverRequest(BaseModel):
     top_ports: int = Field(default=100, ge=10, le=1000)
     deadline_seconds: float = Field(default=600.0, ge=60.0, le=3600.0)
+    #: Range to discover: CIDR, A.B.C.N-M, or one address (which expands to its /24). Empty means the manifest scope.
+    range: str | None = Field(default=None, max_length=64)
+
+    @field_validator("range")
+    @classmethod
+    def _range(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
 
 
 class TargetRequest(BaseModel):
@@ -243,6 +254,20 @@ def run_view(out_dir: Path, run_id: str) -> dict[str, Any] | None:
                     for row in conn.execute(
                         "SELECT sha256, format, state, path, details_json FROM binaries WHERE run_id=? ORDER BY id",
                         (run_id,))]
+        decompile_by_sha: dict[str, dict[str, Any]] = {}
+        for row in conn.execute("SELECT payload_json FROM evidence WHERE run_id=? AND type='decompile'", (run_id,)):
+            payload = json.loads(row["payload_json"] or "{}")
+            if payload.get("sha256"):
+                decompile_by_sha[str(payload["sha256"])] = payload
+        for item in binaries:
+            details = item["details"]
+            item["sources"] = list(dict.fromkeys(
+                source for source in [details.get("source", ""), *details.get("sources", [])] if source))
+            info = decompile_by_sha.get(item["sha256"], {})
+            item["decompile"] = {"tool": info.get("tool"), "functions": (info.get("functions") or [])[:200],
+                                 "imports": (info.get("imports") or [])[:100],
+                                 "decompiled": str(info.get("decompiled") or "")[:6000],
+                                 "main_listing": (info.get("main_listing") or [])[:80]}
         lineage = [dict(row) for row in conn.execute(
             "SELECT id, agent, kind, state, parent_task_id, created_at, payload_json FROM tasks WHERE run_id=?"
             " ORDER BY created_at, rowid LIMIT 400", (run_id,))]
@@ -354,6 +379,9 @@ def create_app(
                 "allowlist": [str(net) for net in compiled.allowlist],
                 "exclude": [str(net) for net in compiled.exclude],
                 "scope_hash": compiled.scope_hash, "auth_tests": manifest.checks.auth_tests,
+                "llm": {"enabled": manifest.llm.enabled, "provider": manifest.llm.provider,
+                        "model": manifest.llm.model,
+                        "key_present": bool(os.environ.get(manifest.llm.api_key_env, "").strip())},
                 "max_auth_attempts_per_account": manifest.limits.max_auth_attempts_per_account,
                 "max_rate_pps": manifest.limits.max_rate_pps,
                 "flag_patterns": len(manifest.flags.patterns), "binaries_declared": manifest.scope.binaries,
@@ -492,8 +520,14 @@ def create_app(
         refusal = _guard_start(x_mitigata_token)
         if refusal is not None:
             return refusal
+        targets: list[str] = []
+        if payload.range:
+            try:
+                targets = resolve_range(scope_path, payload.range)
+            except (ValueError, ConfigError) as exc:
+                return JSONResponse({"error": str(exc)[:300]}, status_code=422)
         options = HuntOptions(scope_path=scope_path, out_dir=out_dir, top_ports=payload.top_ports,
-                              deadline_seconds=payload.deadline_seconds,
+                              deadline_seconds=payload.deadline_seconds, targets=targets,
                               on_created=lambda run_id: job.update(run_id=run_id))
         return _start_job("discover", lambda: run_discovery(options))
 
@@ -527,6 +561,31 @@ def create_app(
         if view is None:
             return PlainTextResponse("Not found", status_code=404)
         return JSONResponse(view)
+
+    @app.delete("/api/runs/{run_id}")
+    def delete_run(run_id: str, x_mitigata_token: str = Header(default="")) -> Response:
+        """Delete one finished run's files. Its attempt counts move to the engagement ledger first."""
+        if not secrets.compare_digest(x_mitigata_token, token):
+            return PlainTextResponse("Forbidden", status_code=403)
+        if not RUN_ID.fullmatch(run_id):
+            return JSONResponse({"error": "not a run identifier"}, status_code=422)
+        current = job.snapshot()
+        if current.get("state") == "running" and current.get("run_id") == run_id:
+            return JSONResponse({"error": "this run is still in progress; wait for it to finish"}, status_code=409)
+        run_dir = out_dir / run_id
+        if not run_dir.is_dir():
+            return PlainTextResponse("Not found", status_code=404)
+        view = run_view(out_dir, run_id)
+        if view is not None and view["run"].get("status") == "running":
+            return JSONResponse({"error": "this run is still in progress; wait for it to finish"}, status_code=409)
+        if run_dir.resolve().parent != out_dir.resolve():  # never delete outside the output folder
+            return JSONResponse({"error": "refusing to delete outside the output folder"}, status_code=422)
+        try:
+            engagement.archive_run_attempts(out_dir, run_id)
+        except RuntimeError as exc:
+            return JSONResponse({"error": str(exc)[:300]}, status_code=409)
+        shutil.rmtree(run_dir)
+        return JSONResponse({"deleted": run_id, "attempts_kept_in_ledger": True})
 
     @app.get("/api/runs/{run_id}/report/{fmt}")
     def report(run_id: str, fmt: str) -> Response:

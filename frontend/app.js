@@ -82,6 +82,14 @@
       chips.push(scope.auth_tests
         ? `<span class="chip warn">credential tests on · cap ${esc(scope.max_auth_attempts_per_account)}/account</span>`
         : '<span class="chip">credential tests off</span>');
+      const llm = scope.llm || {};
+      if (llm.enabled) {
+        chips.push(llm.key_present
+          ? `<span class="chip ok">LLM planner on · ${esc(llm.model)}</span>`
+          : '<span class="chip bad">LLM planner on · key not set in the environment</span>');
+      } else {
+        chips.push('<span class="chip">LLM planner off</span>');
+      }
     } else {
       chips.push(`<span class="chip bad">${esc(scope.message || "no scope")}</span>`);
     }
@@ -176,7 +184,11 @@
     try {
       state.job = await api("/api/discover", {
         method: "POST", token: true,
-        body: { top_ports: Number($("#top-ports-input").value), deadline_seconds: Number($("#discover-deadline-input").value) },
+        body: {
+          top_ports: Number($("#top-ports-input").value),
+          deadline_seconds: Number($("#discover-deadline-input").value),
+          range: $("#range-input").value.trim() || null,
+        },
       });
       notice("Discovery started. Alive hosts appear in step 2 when it finishes.");
       await loadRuns();
@@ -271,6 +283,13 @@
     renderControls();
   }
 
+  function renderDeleteButton() {
+    const button = $("#delete-run-btn");
+    if (!button) return;
+    const running = Boolean(state.view && state.view.run && state.view.run.status === "running");
+    button.disabled = !state.runId || running;
+  }
+
   function renderAll() {
     renderControls();
     renderGuard(state.view);
@@ -286,6 +305,7 @@
     renderTimeline(state.view);
     renderCoverage(state.view);
     renderGaps();
+    renderDeleteButton();
     document.querySelectorAll(".agent").forEach((card) => {
       const active = state.view && state.view.run.status === "running" && state.view.agents.some(
         (agent) => agent.agent === card.dataset.agent && (agent.states.running || 0) > 0);
@@ -401,10 +421,7 @@
         (item) => `<tr><td>${esc(item.method)}</td><td class="wrap">${esc(short(item.url, 120))}</td></tr>`).join("")}</table></div>`
       : '<p class="empty">No endpoints yet.</p>';
 
-    $("#board-binaries").innerHTML = view.binaries.length
-      ? `<div class="scroll"><table><tr><th>Binary</th><th>Format</th><th>Protections</th><th>Analysis</th>
-          <th>Literals</th><th>State</th></tr>${view.binaries.map((item) => binaryRow(item)).join("")}</table></div>`
-      : '<p class="empty">No binary found on this target yet.</p>';
+    renderBinaries(view);
 
     $("#board-creds").innerHTML = view.credentials.length
       ? `<div class="scroll"><table><tr><th>Ref</th><th>Kind</th><th>Source</th></tr>${view.credentials.map(
@@ -419,22 +436,38 @@
       : '<p class="empty">No leads yet.</p>';
   }
 
-  function binaryRow(item) {
+  function renderBinaries(view) {
+    const items = view.binaries || [];
+    $("#board-binaries").innerHTML = items.length
+      ? items.map((item) => binaryCard(item)).join("")
+      : '<p class="empty">No binary yet. Supplied binaries are analysed from the binaries folder; the web agent also downloads ELF or PE links it finds on the target.</p>';
+  }
+
+  function binaryCard(item) {
     const d = item.details || {};
     const p = d.protections || {};
     const a = d.analysis || {};
     const s = d.solver || {};
-    const protections = [p.nx ? "NX" : "no NX", p.pie ? "PIE" : "no PIE",
-      p.relro ? `RELRO ${p.relro}` : "no RELRO"].join(" · ");
+    const dc = item.decompile || {};
+    const found = (item.sources || []).map((source) => `<li>${esc(short(source, 140))}</li>`).join("") || "<li>unknown</li>";
+    const protections = [p.nx ? "NX" : "no NX", p.pie ? "PIE" : "no PIE", p.relro ? `RELRO ${p.relro}` : "no RELRO"].join(" · ");
     const analysis = a.tool ? `${a.tool} · ${a.status}` : (a.status || "not run");
-    const errors = (a.errors || []).map((message) => `<div class="muted">${esc(short(message, 140))}</div>`).join("");
-    const solver = s.status ? `solver: ${esc(s.status)}${s.reason ? ` (${esc(short(s.reason, 90))})` : ""}` : "";
-    return `<tr><td class="wrap">${esc(item.name || item.sha256.slice(0, 12))}</td><td>${esc(item.format)}</td>
-      <td class="wrap">${esc(protections)}</td>
-      <td class="wrap">${esc(analysis)}${errors}<div class="muted">${esc(a.functions ?? 0)} functions ·
-        ${esc(a.decompiled_functions ?? 0)} decompiled</div></td>
-      <td>${esc(d.literal_count ?? 0)}</td>
-      <td class="wrap">${esc(item.state)}${solver ? `<div class="muted">${solver}</div>` : ""}</td></tr>`;
+    const errors = (a.errors || []).map((message) => `<li class="muted">${esc(short(message, 160))}</li>`).join("");
+    const solver = s.status
+      ? `${esc(s.status)}${s.length ? ` (length ${esc(s.length)})` : ""}${s.reason ? ` — ${esc(short(s.reason, 120))}` : ""}`
+      : "not run";
+    const unsafe = (d.unsafe_imports || []).join(", ") || "none";
+    return `<article class="binary-card">
+      <h5>${esc(item.name || item.sha256.slice(0, 12))} <span class="muted small">${esc(item.format)} · sha256 ${esc(item.sha256.slice(0, 16))}</span></h5>
+      <p><b>Found at</b></p><ul>${found}</ul>
+      <p><b>Analysis</b> ${esc(analysis)} · ${esc(a.functions ?? 0)} functions · ${esc(a.decompiled_functions ?? 0)} decompiled</p>
+      ${errors ? `<ul>${errors}</ul>` : ""}
+      <p><b>Protections</b> ${esc(protections)} · <b>Unsafe imports</b> ${esc(unsafe)}</p>
+      <p><b>Literals</b> ${esc(d.literal_count ?? 0)} recovered (values are never shown) · <b>Solver</b> ${solver}</p>
+      <details><summary>Functions (${esc((dc.functions || []).length)})</summary><pre>${esc((dc.functions || []).join("\n") || "(none)")}</pre></details>
+      <details><summary>Decompiled code (excerpt)</summary><pre>${esc(dc.decompiled || "(none)")}</pre></details>
+      <details><summary>Disassembly of main (radare2)</summary><pre>${esc((dc.main_listing || []).join("\n") || "(none)")}</pre></details>
+    </article>`;
   }
 
   function renderLineage(view) {
@@ -549,6 +582,22 @@
     $("#run-select").addEventListener("change", async (event) => {
       state.runId = event.target.value;
       await loadRun();
+    });
+    $("#delete-run-btn").addEventListener("click", async () => {
+      const runId = state.runId;
+      if (!runId) return;
+      const message = `Delete run ${runId}? Its files are removed. Its credential-attempt counts stay in the engagement ledger, so the attempt cap still holds.`;
+      if (!window.confirm(message)) return;
+      try {
+        await api(`/api/runs/${encodeURIComponent(runId)}`, { method: "DELETE", token: true });
+        notice(`Deleted ${runId}. Its attempt counts are kept in the engagement ledger.`);
+        state.runId = "";
+        state.view = null;
+        await loadRuns();
+        await loadRun();
+      } catch (error) {
+        notice(error.message, "error");
+      }
     });
     try {
       await loadStatus();

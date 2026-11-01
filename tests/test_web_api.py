@@ -196,3 +196,11 @@ def test_run_detail_carries_mode_tools_and_the_full_stage_history(client, run_id
     assert {row["key"] for row in body["tools"]} == {"nmap", "katana", "ffuf", "radare2", "ghidra"}
     assert len(body["stages"]) >= 5  # read from the whole history, not from the 200 newest events
     assert body["current_stage"] is None
+
+
+def test_discover_range_is_checked_against_the_manifest_before_anything_runs(client):
+    headers = {**LOCAL, "X-Mitigata-Token": TOKEN}
+    refused = client.post("/api/discover", headers=headers, json={"range": "10.9.9.0/30"})
+    assert refused.status_code == 422 and "outside the manifest scope" in refused.json()["error"]
+    malformed = client.post("/api/discover", headers=headers, json={"range": "not-a-range"})
+    assert malformed.status_code == 422

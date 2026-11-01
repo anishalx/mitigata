@@ -77,6 +77,25 @@ trusted address → binary → analysis → verification.
 - **Binary outcome.** Every binary records which tool ran, its status, the reason for any failure or skip, function
   counts, the literal count, and where each literal came from. The dashboard and the event log show it.
 
+## Using the dashboard
+
+1. **Discover:** enter the IP range to scan (`192.168.60.0/24`, `192.168.60.10-40`, or one address, which expands to
+   its /24). Ranges are checked against the manifest first; anything outside it is refused with the reason.
+2. **Choose:** click a live host in the alive list.
+3. **Scan:** the network agent scans the chosen IP, the web agent lists its endpoints and downloads the binaries it
+   links to, and the binary agent analyses each one. The **Binary agent output** panel shows where each binary was
+   found, the analysis status, protections, the solver result, and expandable functions, decompiled code and
+   disassembly. Literal values are never shown.
+
+**Deleting a past run:** the **Delete run** button removes one finished run's files after a confirmation. A run in
+progress cannot be deleted. Before the files go, the run's credential-attempt counts move to
+`runs/.engagement-ledger.json`. The attempt cap is counted from the ledger as well as the remaining runs, so deleting
+results never gives an account its attempts back. An unreadable ledger stops the engagement rather than resetting
+the cap.
+
+**LLM key:** put `DEEPSEEK_API_KEY=` in `.env` (git-ignored) or export it in the shell that starts the dashboard. The
+status bar shows whether the planner is on and whether the key is set; the key itself is never displayed.
+
 ## Binary analysis and the solver
 
 Static triage reads ELF/PE protections, unsafe imports and printable literals. When Ghidra is installed it decompiles the

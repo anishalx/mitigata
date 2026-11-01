@@ -20,7 +20,8 @@ from typing import Any, Iterable, Iterator
 from . import dedup
 from .models import CoverageRow, Event, TaskRecord, utcnow
 from .report.render import build_report, write_report
-from .scope import CompiledScope
+from .config import load_manifest
+from .scope import CompiledScope, compile_scope
 from .store import Store
 from .surfaces.network import scan_host
 
@@ -93,6 +94,26 @@ def filter_scope(scope: CompiledScope, hosts: Iterable[str]) -> list[str]:
         except ValueError:
             continue
     return selected
+
+
+MAX_RANGE_HOSTS = 4096
+
+
+def resolve_range(scope_path: Path | None, spec: str, *, limit: int = MAX_RANGE_HOSTS) -> list[str]:
+    """Expand a user range and keep only the addresses the manifest allows. Any refusal raises ValueError."""
+    if scope_path is None:
+        raise ValueError("no scope manifest is loaded; start the dashboard with --scope")
+    manifest, _ = load_manifest(scope_path)
+    scope = compile_scope(manifest)
+    hosts = parse_range(spec)
+    if not hosts:
+        raise ValueError("the range contains no usable host addresses")
+    if len(hosts) > limit:
+        raise ValueError(f"the range has {len(hosts)} addresses; the limit is {limit}")
+    allowed = filter_scope(scope, hosts)
+    if len(allowed) != len(hosts):
+        raise ValueError(f"{len(hosts) - len(allowed)} address(es) are outside the manifest scope or excluded")
+    return allowed
 
 
 def probe(

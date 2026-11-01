@@ -21,6 +21,8 @@
       <label class="field-inline">Run
         <select id="run-select" aria-label="Select run"></select>
       </label>
+      <button type="button" id="delete-run-btn" class="danger-btn" disabled
+              title="Deletes this run's files. Its credential-attempt counts stay in the engagement ledger.">Delete run</button>
     </div>
   </header>
 
@@ -39,6 +41,10 @@
         <p class="muted small">Scans the authorised range for live hosts and their top TCP ports. Nothing deeper runs until you pick an IP.</p>
         <form id="discover-form" class="kickoff-form" autocomplete="off">
           <div class="row">
+            <label>IP range to discover
+              <input id="range-input" type="text" maxlength="64" autocomplete="off"
+                     placeholder="192.168.60.0/24 · 192.168.60.10-40 · empty = whole manifest scope">
+            </label>
             <label>Top ports per host
               <select id="top-ports-input">
                 <option value="100" selected>100 (fast)</option>
@@ -170,7 +176,7 @@
         <div class="board-grid">
           <section class="panel"><h4>Hosts &amp; ports</h4><div id="board-hosts"></div></section>
           <section class="panel"><h4>Endpoints</h4><div id="board-endpoints"></div></section>
-          <section class="panel"><h4>Binaries &amp; decompile</h4><div id="board-binaries"></div></section>
+          <section class="panel wide"><h4>Binary agent output <small>(where each binary was found, what the analysis showed)</small></h4><div id="board-binaries"></div></section>
           <section class="panel wide"><h4>Discovery chain <small>(each step was caused by the step above it)</small></h4><div id="board-lineage"></div></section>
           <section class="panel"><h4>Extracted creds <small>(references only)</small></h4><div id="board-creds"></div></section>
           <section class="panel wide"><h4>Findings <span class="chip cand">[CANDIDATE]</span></h4><div id="board-findings"></div></section>

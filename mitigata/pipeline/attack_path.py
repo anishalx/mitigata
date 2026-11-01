@@ -27,6 +27,13 @@ CREDENTIAL_WEIGHT = 0.5
 _WEB_SOURCE = re.compile(r"^web:([^:]+):(\d+)")
 
 
+def _binary_sources(details_json: str | None) -> list[str]:
+    """Every place a binary was found: the first source plus each duplicate's source, in order."""
+    details = json.loads(details_json or "{}")
+    return list(dict.fromkeys(str(source) for source in [details.get("source", ""), *details.get("sources", [])]
+                              if source))
+
+
 def _web_origin(source: str) -> tuple[str, int] | None:
     """(ip, port) of a binary that was downloaded from a web origin, from its recorded source."""
     match = _WEB_SOURCE.match(source)
@@ -108,8 +115,7 @@ def build(snapshot: dict[str, Any]) -> dict[str, Any]:
                 if not graph.has_node(content):
                     graph.add_node(content, label=f"content served to a trusted forwarded address on {key[0]}:{key[1]}",
                                    kind="content", ptes_phase="exploitation", state="confirmed")
-    binary_sources = {str(item["sha256"]): str(json.loads(item.get("details_json") or "{}").get("source", ""))
-                      for item in snapshot["binaries"]}
+    binary_sources = {str(item["sha256"]): _binary_sources(item.get("details_json")) for item in snapshot["binaries"]}
     binary_names = {str(item["sha256"]): str(item.get("path", "")).rsplit("/", 1)[-1] for item in snapshot["binaries"]}
     for credential in snapshot["credentials"]:
         cred_node = _node_id("credential", credential["secret_ref"])
@@ -133,12 +139,14 @@ def build(snapshot: dict[str, Any]) -> dict[str, Any]:
             name = binary_names.get(binary_sha, "")
             graph.add_node(binary_node, label=f"binary {name or binary_sha[:12]} (static)", kind="binary",
                            ptes_phase="vulnerability_analysis", state="confirmed")
-            origin = _web_origin(binary_sources.get(binary_sha, ""))
-            if origin in bypass_services:
-                graph.add_edge(_node_id("content", origin[0], origin[1]), binary_node,
+            origins = [origin for origin in (_web_origin(source) for source in binary_sources.get(binary_sha, []))
+                       if origin is not None]
+            bypass_origin = next((origin for origin in origins if origin in bypass_services), None)
+            if bypass_origin is not None:
+                graph.add_edge(_node_id("content", bypass_origin[0], bypass_origin[1]), binary_node,
                                label="downloaded behind the trusted address", ptes_phase="vulnerability_analysis", w=1.0)
             else:
-                graph.add_edge(ATTACKER, binary_node, label="downloaded from web" if origin else "supplied artifact",
+                graph.add_edge(ATTACKER, binary_node, label="downloaded from web" if origins else "supplied artifact",
                                ptes_phase="intelligence_gathering", w=1.0)
         graph.add_edge(binary_node, cred_node, label="string literal in binary",
                        ptes_phase="vulnerability_analysis", w=CREDENTIAL_WEIGHT)

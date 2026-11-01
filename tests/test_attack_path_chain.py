@@ -55,3 +55,14 @@ def test_without_a_bypass_a_web_download_is_shown_as_a_download_not_as_a_supplie
     assert "downloaded from web" in actions
     assert "supplied artifact" not in actions
     assert not any(node["kind"] == "content" for node in graph["nodes"])
+
+
+def test_a_web_copy_kept_as_a_duplicate_source_still_links_through_the_bypass():
+    snapshot = _snapshot(bypass=True)
+    # The supplied copy is the first source; the web copy (same bytes) is kept as a later source.
+    snapshot["binaries"] = [{"sha256": "abc123", "path": "/evidence/keykeeper",
+                             "details_json": json.dumps({"source": "scope:keykeeper",
+                                                         "sources": ["scope:keykeeper",
+                                                                     "web:127.0.0.1:80/vault/keykeeper"]})}]
+    graph = attack_path.build(snapshot)
+    assert "downloaded behind the trusted address" in _actions(graph)

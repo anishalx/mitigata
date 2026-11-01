@@ -128,6 +128,8 @@ def test_forwarded_header_chain_is_discovered_end_to_end(tmp_path, monkeypatch):
     kinds = {row["kind"]: row for row in view["lineage"]}
     assert "header_trust_probe" in kinds and kinds["header_trust_probe"]["parent_task_id"]
     assert any(row["kind"] == "triage_binary" and row["parent_task_id"] for row in view["lineage"])
+    # The web copy has the same bytes as the supplied binary: it is kept as a source, not dropped.
+    assert any(source.startswith("web:") for item in view["binaries"] for source in item["sources"])
     assert view["counts"]["flags"] >= 1
     report = Path(result["run_dir"], "report.md").read_text(encoding="utf-8")
     assert FLAG not in report

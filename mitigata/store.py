@@ -490,6 +490,19 @@ class Store:
             )
             return conn.execute("SELECT id FROM binaries WHERE run_id=? AND sha256=?", (run_id, sha256)).fetchone()["id"]
 
+    def add_binary_source(self, run_id: str, sha256: str, source: str) -> None:
+        """Record another place where the same bytes were found, for example a web copy of a supplied binary."""
+        with self._tx() as conn:
+            row = conn.execute("SELECT details_json FROM binaries WHERE run_id=? AND sha256=?",
+                               (run_id, sha256)).fetchone()
+            if row is None:
+                return
+            details = json.loads(row["details_json"] or "{}")
+            sources = [*details.get("sources", []), details.get("source", ""), source]
+            details["sources"] = list(dict.fromkeys(item for item in sources if item))
+            conn.execute("UPDATE binaries SET details_json=? WHERE run_id=? AND sha256=?",
+                         (json.dumps(details, sort_keys=True, default=str), run_id, sha256))
+
     def binaries(self, run_id: str) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM binaries WHERE run_id=? ORDER BY id", (run_id,)).fetchall()
 
