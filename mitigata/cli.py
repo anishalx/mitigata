@@ -114,14 +114,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if not 1 <= args.port <= 65535:
         print("cannot start the dashboard: port must be between 1 and 65535", file=sys.stderr)
         return EXIT_USAGE
+    reveal = bool(getattr(args, "reveal_recovered", False))
     app = create_app(
         out_dir=Path(args.out), scope_path=Path(args.scope).resolve() if args.scope else None, port=args.port,
+        reveal_recovered=reveal,
     )
     host = getattr(args, "host", "127.0.0.1")
     if host not in ("127.0.0.1", "0.0.0.0"):
         print("cannot start the dashboard: --host must be 127.0.0.1 or 0.0.0.0", file=sys.stderr)
         return EXIT_USAGE
     print(f"MITIGATA dashboard: http://127.0.0.1:{args.port}/   (Ctrl+C to stop)", flush=True)
+    if reveal:
+        print("private view: recovered literal values are shown in the dashboard; reports never include them", flush=True)
     if host == "0.0.0.0":
         print("warning: bound on all container interfaces; publish the port to 127.0.0.1 on the host only", flush=True)
     uvicorn.run(app, host=host, port=args.port, log_level="warning", access_log=False)
@@ -464,6 +468,9 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1",
                        help="bind address: 127.0.0.1 (default) or 0.0.0.0 inside a container whose port is published "
                             "to the host's loopback only")
+    serve.add_argument("--reveal-recovered", action="store_true",
+                       help="private view: show the literal values the binary analysis recovered, in the binary panel "
+                            "(off by default; reports never contain them)")
     serve.set_defaults(func=cmd_serve)
 
     gui = sub.add_parser("gui", help="alias of 'serve' (kept for existing scripts)")

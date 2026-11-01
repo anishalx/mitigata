@@ -19,12 +19,14 @@ needs the per-process token that the page receives from `/api/status`; the token
 
 | Panel | Source | Notes |
 |---|---|---|
-| Kickoff | `/api/status` | Scope, focus host, deadline and the equivalent CLI command. **Start hunt** is enabled only when the manifest is valid and its window is open. |
+| Discover (step 1) | `/api/status`, `/api/discover` | Range input and the **Run** button in the top bar. Run is enabled only when the manifest is valid and its window is open, and it starts with an empty screen. |
+| Previous runs | `/api/runs` | One row per run. **Open** shows it; **Delete** removes its files and is disabled for a run in progress. |
+| Clear | (browser only) | Empties the screen. The run on screen is kept per browser in `localStorage` (key `mitigata.view`), so a reload keeps it empty. |
 | Scope guard | run events and `scope_events` | In-scope hosts, refused and sent-outside counts, auth-test state. |
 | Orchestrator | `stage.started` / `stage.finished` events | PTES phase of the current stage and a deadline bar. |
 | Agents | `tasks` table | Per-agent states (`done`, `running`, `pending`, `failed`) and the last event. |
 | Shared blackboard | `/api/runs/{id}` | Hosts and ports, endpoints (parameter values redacted), credential references (never values), findings marked `[CANDIDATE]`. |
-| Verification | candidates with validations | CONFIRMED / REJECTED / INCONCLUSIVE, the oracle, the control and the attempt count. |
+| Verification | candidates with validations | CONFIRMED / REJECTED / INCONCLUSIVE, the oracle, the control and the attempt count. For open leads, the plain-English fix and how to check it. |
 | Attack path & report | `attack_path.json`, `report.*` | Chains to an objective (authenticated access or a captured flag), each step tagged with its PTES phase; downloads for Markdown, HTML, JSON and Mermaid. |
 | Timeline, coverage, gaps | events, `coverage`, `report.json` | What was checked, what was not, and the limitations stated in the report. |
 
@@ -46,6 +48,7 @@ needs the per-process token that the page receives from `/api/status`; the token
 | GET | `/api/job` | State of the most recent hunt started from the server |
 | GET | `/api/runs` | Run list with counts |
 | GET | `/api/runs/{id}` | Full run view for the dashboard |
+| DELETE | `/api/runs/{id}` | Delete one finished run's files (`X-Mitigata-Token` required); its attempt counts move to the engagement ledger |
 | GET | `/api/runs/{id}/report/{md\|html\|json\|attack-path\|mermaid}` | Report downloads |
 | GET | `/targets?run_id=` | Live hosts and their ports |
 | GET | `/targets/{asset_id}/findings?run_id=` | Findings for one target (PRD FR-7 route) |

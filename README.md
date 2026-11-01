@@ -10,6 +10,96 @@ Nothing is sent outside the manifest's ranges, and credential checks run only ag
 
 Scope of this build: authorised lab testing only. See **Safety model** below.
 
+## The problem
+
+**CyberForge problem statement (PS):** Network Asset Discovery and Mapping: live map of every device and connection.
+
+**Our elaborated problem statement:**
+
+> The problem. Doing this by hand is slow and easy to get wrong. One engineer looks at one surface at a time. The web
+> tester, the network scanner and the binary analyst do not share what they find, so the same host gets looked at three
+> times, weaknesses get missed, and the full attack path is never seen. The work is hard to repeat and hard to trust.
+
+## Our proposed solution
+
+MITIGATA runs the chain from discovery to report from one kickoff. Every agent works from the same record of what has
+been found.
+
+1. **Scope guard and firewall.** Each target is checked against the authorised ranges before any packet is sent.
+   Out-of-scope targets are refused and logged.
+2. **Orchestrator.** Starts the agents, enforces the time budgets, avoids repeated work, tags each step with its PTES
+   phase and hands leads to verification.
+3. **Four agents on one blackboard.** The discovery agent finds live hosts and open ports. The network agent identifies
+   services, reads banners and checks authentication surfaces. The web agent crawls, lists endpoints and follows the
+   names the target itself prints. The binary agent triages supplied and downloaded binaries and recovers literals.
+   All four write to one SQLite database, the blackboard, and read each other's results.
+4. **Verification.** Each lead is tested with a control request beside it and ends as CONFIRMED, REJECTED or
+   INCONCLUSIVE, with the oracle recorded.
+5. **Attack path and report.** Confirmed steps are chained into a graph from the operator to an objective: authenticated
+   access or a flag. The report (Markdown and JSON by default, HTML on request) gives the evidence and a plain-English
+   fix for each finding.
+6. **Dashboard.** A local page, on loopback, shows the run as it happens: stages, hosts, endpoints, binary output, the
+   discovery chain, verdicts and the attack path.
+
+The optional DeepSeek planner may only choose among candidates the target itself named. It cannot add a probe or confirm
+a finding.
+
+## What it solves
+
+| The problem | What MITIGATA does | Where to see it |
+|---|---|---|
+| Slow and manual | One kickoff runs discovery, scanning, crawling, binary analysis, verification and the report, within time budgets (10 min for discovery and 25 min for a target scan by default) | Stepper and timeline on the dashboard; `mitigata hunt` on the command line |
+| One engineer, one surface at a time | Four agents work on their own surface under one orchestrator and one set of budgets | Agent cards on the dashboard |
+| Agents do not share what they find | Every host, service, endpoint, credential reference, lead and binary goes into one blackboard, and each agent reads what the others wrote | Shared blackboard panel |
+| The same host is looked at three times | Each task has a dedup key, so the same work is not repeated, and each follow-up is linked to the step that caused it | Discovery chain panel |
+| Weaknesses get missed | Follow-up probes from what the target says (hint paths), a forwarded-address trust test, binary literal recovery and an offline solver. Each lead is verified before it counts. | Binary agent output, findings and verification panels |
+| The full attack path is never seen | The attack-path graph chains confirmed steps from the operator to an objective, each step tagged with its PTES phase | Attack path panel; report |
+| Hard to repeat and hard to trust | Scope is checked before any socket opens. Each run records the manifest hash. Every verdict records its oracle, and its control where one was sent. Reports carry evidence and fixes. Secret values stay out of reports and the blackboard. | Run record; report files; dashboard |
+| Live map of every device and connection (CyberForge PS) | Hosts, ports, services and endpoints appear as each stage finishes, and the discovery chain and attack path link each step to the step that caused it. Not built yet: a drawn network map of every device and every connection. | Dashboard; attack path |
+
+## Architecture
+
+![MITIGATA architecture](docs/architecture.png)
+
+**How data moves.** The kickoff (a target range and any binaries) goes through the scope guard to the orchestrator. The
+orchestrator starts the four agents, which write findings to the blackboard. Verification picks up the candidates and
+writes its verdicts back. The attack-path and report engine reads the confirmed results. The dashboard reads the
+blackboard while the run is going.
+
+**Design and build.** The diagram shows the design. The build differs in three places:
+
+- Scanning uses nmap. Naabu and Scapy are in the diagram but not in the build.
+- The web agent uses a built-in crawler and fuzzer, with katana and ffuf when they are installed. OWASP ZAP and Nuclei
+  are in the diagram but not in the build.
+- The blackboard stores credential references. Values are kept in a private file (mode 0600), not as user:pass pairs
+  as the diagram suggests.
+
+## Technologies and tools
+
+| Layer | Tool or library | What it is used for |
+|---|---|---|
+| Language | Python 3.12, packaged with hatchling | All of the pipeline, the API and the command line |
+| Discovery and port scans | nmap | Host discovery, the top-port scan, the full-range sweep, and service and version detection. TCP connect, so no root is needed. |
+| Web crawl | Built-in same-origin crawler; katana (optional) | Pages, links and forms on web services. GET requests only. |
+| Endpoint fuzzing | Built-in wordlist fuzzer; ffuf (optional) | Common paths from the vendored SecLists list, rate limited |
+| Hint probes | Built-in extraction, with the SecLists list as the vocabulary | Names the target prints (for example a `/vault/` link), each requested once; state-changing names are excluded |
+| Binary triage | radare2 6.2.4, pinned in the image | Strings, imports, functions, protections and disassembly of supplied binaries |
+| Decompilation | Ghidra `analyzeHeadless` (optional) | C decompilation and the function list; radare2 is the fallback when Ghidra is missing |
+| Solver | angr 9.2 (optional) | Offline emulation of a check that gates on stdout, to find an input that prints success. A candidate counts only after a concrete run confirms it. |
+| HTTP client | Python standard library `http.client` | Requests made through the scope guard, so each one is checked first |
+| Shared store | SQLite in WAL mode | The blackboard: assets, services, endpoints, credential references, leads, verdicts, tasks and events |
+| Attack path | NetworkX | The directed graph from the operator to the objectives, with Mermaid output for the diagram |
+| Verification | Python (`verifier.py`) | Control-based verdicts, and per-account attempt caps shared across runs through the engagement ledger |
+| Dashboard and API | FastAPI and uvicorn; HTML, CSS and vanilla JavaScript | Loopback-only page and read API, with one token-protected write route and a strict Content-Security-Policy. No build step. |
+| Models and config | Pydantic v2 and PyYAML | Validated run records and the YAML scope manifest |
+| Optional planner | DeepSeek API (`deepseek-flash` by default) | Chooses among the target's own candidates. Never confirms a finding. |
+| Packaging and deployment | Docker (python:3.12-slim-bookworm) and docker compose; uv for the local virtual environment | One image with nmap, radare2 and the optional solver. Host networking on Linux. |
+| Tests | pytest and the FastAPI test client | Unit, end-to-end, API and loopback-chain tests, all on loopback |
+| Standards and lists | PTES phases; SecLists common list (MIT, vendored) | Each step tagged with its PTES phase; the list drives hint and fuzz paths |
+
+For the module map see [How the pipeline maps to the design](#how-the-pipeline-maps-to-the-design). For the gaps see
+[What is built and what is not](#what-is-built-and-what-is-not).
+
 ## Quick start
 
 ### Local (Python 3.12, nmap, radare2 on PATH)
@@ -79,19 +169,31 @@ trusted address → binary → analysis → verification.
 
 ## Using the dashboard
 
-1. **Discover:** enter the IP range to scan (`192.168.60.0/24`, `192.168.60.10-40`, or one address, which expands to
-   its /24). Ranges are checked against the manifest first; anything outside it is refused with the reason.
-2. **Choose:** click a live host in the alive list.
+1. **Run:** enter the IP range to scan (`192.168.60.0/24`, `192.168.60.10-40`, or one address, which expands to its
+   /24) and press **Run** in the top bar. Ranges are checked against the manifest first; anything outside it is refused
+   with the reason. The screen starts empty, and the alive hosts appear as discovery finds them.
+2. **Choose:** click a live host in the alive list, then press **Scan this IP**.
 3. **Scan:** the network agent scans the chosen IP, the web agent lists its endpoints and downloads the binaries it
    links to, and the binary agent analyses each one. The **Binary agent output** panel shows where each binary was
    found, the analysis status, protections, the solver result, and expandable functions, decompiled code and
    disassembly. Literal values are never shown.
 
-**Deleting a past run:** the **Delete run** button removes one finished run's files after a confirmation. A run in
-progress cannot be deleted. Before the files go, the run's credential-attempt counts move to
-`runs/.engagement-ledger.json`. The attempt cap is counted from the ledger as well as the remaining runs, so deleting
-results never gives an account its attempts back. An unreadable ledger stops the engagement rather than resetting
-the cap.
+**Previous runs:** every run is listed at the side of the page. Open a run to see its output. **Delete** on a run's row
+removes that run's files after a confirmation. A run in progress cannot be deleted. Before the files go, the run's
+credential-attempt counts move to `runs/.engagement-ledger.json`. The attempt cap is counted from the ledger as well as
+the remaining runs, so deleting results never gives an account its attempts back. An unreadable ledger stops the
+engagement rather than resetting the cap.
+
+**Clear:** empties the screen so the dashboard looks like a fresh start, for example before a demo. Nothing is deleted:
+the runs stay in Previous runs, and a scan that is still running keeps going. The cleared screen is kept per browser, so
+a reload does not bring the old results back. **Run** then starts a fresh scan.
+
+**Fixes:** every finding and every open lead carries a plain-English fix, and every finding also says how to check it. The
+verification panel shows both for open leads. The report carries the same text (Markdown, HTML and JSON).
+
+**Private view (optional):** start the dashboard with `--reveal-recovered` to see the literal values the binary analysis
+recovered. They appear in the binary panel after the disassembly, behind a click, and a chip in the top bar says the
+private view is on. Reports never contain them.
 
 **LLM key:** put `DEEPSEEK_API_KEY=` in `.env` (git-ignored) or export it in the shell that starts the dashboard. The
 status bar shows whether the planner is on and whether the key is set; the key itself is never displayed.
@@ -139,7 +241,8 @@ not match the claripy 9.3 that the resolver picks in this environment.
   decision, not a code default.
 - **Destruction:** no writes, uploads, deletions or form submissions. No denial of service, no persistence.
 - **Secrets:** recovered literal values live only in `secrets.json` (mode 0600). They never appear in events, the
-  blackboard, reports, the API, or the planner's requests.
+  blackboard, reports, or the planner's requests. The API returns them only when the server runs with
+  `--reveal-recovered` (the private view, off by default).
 - **Flags:** captured flag values are masked everywhere unless `--include-flags` is passed for a private copy.
 - **Dashboard:** bound to 127.0.0.1 by default. `--host 0.0.0.0` is for containers whose port is published to the host's
   loopback only. Host and Origin checks, a per-process token for the single write route, and a strict CSP
@@ -182,8 +285,9 @@ container image.
 
 Not built, or not verified:
 
-- A live run against a current lab host was not part of this release.
-- The dashboard panels were checked through the API and by a syntax check; they were not exercised in a browser.
+- Live runs against a lab host were made during development. The evidence and the remaining gaps are in `docs/requirements-check.md`.
+- The run controls (Run, Clear, Previous runs, Delete) were exercised in headless Chromium against a loopback lab. The
+  other dashboard panels were checked through the API and by a syntax check.
 - The DeepSeek planner's selection quality has not been measured against a live model.
 - Ghidra is not in the image. Dynamic execution of binaries is not performed.
 - UDP scanning, authenticated crawling beyond the verifier's single-form login, and attack classes beyond the verifier's

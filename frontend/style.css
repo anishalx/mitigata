@@ -62,11 +62,16 @@ button, select, input { font: inherit; }
 .chip.warn { background: #713f12; color: #fde68a; }
 .chip.cand { background: var(--cand-bg); color: var(--ink); }
 .top-actions { display: flex; gap: 10px; align-items: center; }
-.field-inline { display: flex; align-items: center; gap: 8px; color: #cbd5e1; font-size: 12px; }
-.field-inline select, .kickoff-form input, .kickoff-form select {
-  border: 1px solid #334155; border-radius: 8px; padding: 6px 8px; background: #0f2a4a; color: #fff;
+.topbar .run-btn { background: #14b8a6; color: #0b2545; }
+.topbar .clear-btn {
+  border: 1px solid #475569; border-radius: 9px; padding: 9px 14px; background: transparent; color: #e2e8f0;
+  cursor: pointer; font-weight: 600;
 }
-.kickoff-form input, .kickoff-form select { background: #fff; color: var(--ink); border-color: var(--line); }
+.topbar .clear-btn:hover:not(:disabled) { background: #1e3a5f; }
+.topbar .clear-btn:disabled { opacity: .45; cursor: not-allowed; }
+.kickoff-form input, .kickoff-form select {
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; background: #fff; color: var(--ink);
+}
 
 .notice {
   margin: 10px 20px 0; padding: 10px 14px; border-radius: 10px;
@@ -250,3 +255,21 @@ pre { background: #0f172a; color: #e2e8f0; padding: 10px; border-radius: 8px; ov
 .danger-btn { border: 1px solid #b91c1c; color: #b91c1c; background: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
 .danger-btn:hover:not(:disabled) { background: #fef2f2; }
 .danger-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Previous runs: one row per run, each with its own Delete. */
+.runs-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; max-height: 320px; overflow: auto; }
+.runs-list .empty { padding: 4px 2px; }
+.run-row { display: flex; align-items: stretch; gap: 6px; border: 1px solid var(--line); border-radius: 10px; background: #fcfdfe; }
+.run-row.current { border-color: #14b8a6; box-shadow: inset 0 0 0 1px #14b8a6; }
+.run-open {
+  flex: 1; min-width: 0; display: grid; gap: 2px; justify-items: start; text-align: left; padding: 8px 10px;
+  border: 0; border-radius: 10px; background: transparent; color: var(--ink); cursor: pointer; overflow-wrap: anywhere;
+}
+.run-open:hover { background: #f1f5f9; }
+.run-open b { font-size: 12px; }
+.run-open .badge { background: #e2e8f0; color: #334155; }
+.run-row .danger-btn { align-self: center; margin-right: 8px; padding: 4px 9px; font-size: 12px; background: #fff; }
+
+/* Fix suggestions in the verification panel (requirement B-3). */
+.vrow .fix { border-left: 3px solid var(--ok); padding-left: 8px; color: var(--ink); }
+.vrow .fix-check { color: var(--muted); }

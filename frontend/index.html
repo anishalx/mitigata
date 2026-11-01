@@ -18,11 +18,10 @@
     </div>
     <div class="chips" id="chips" aria-live="polite"></div>
     <div class="top-actions">
-      <label class="field-inline">Run
-        <select id="run-select" aria-label="Select run"></select>
-      </label>
-      <button type="button" id="delete-run-btn" class="danger-btn" disabled
-              title="Deletes this run's files. Its credential-attempt counts stay in the engagement ledger.">Delete run</button>
+      <button type="submit" form="discover-form" id="discover-btn" class="primary run-btn"
+              title="Starts a fresh discovery of the range in step 1. The screen starts empty and fills in as the scan proceeds.">Run</button>
+      <button type="button" id="clear-btn" class="clear-btn" disabled
+              title="Empties the screen. Previous runs stay in the list, and a running scan keeps going.">Clear</button>
     </div>
   </header>
 
@@ -59,8 +58,7 @@
             </label>
           </div>
           <div class="actions">
-            <button type="submit" class="primary" id="discover-btn">Discover alive hosts</button>
-            <span class="muted small" id="discover-hint"></span>
+            <span class="muted small" id="discover-hint">Press Run in the top bar to start a fresh discovery of this range.</span>
           </div>
         </form>
       </article>
@@ -214,6 +212,11 @@
 
     <aside class="side">
       <section class="card">
+        <h3>Previous runs</h3>
+        <p class="muted small">Open a run to see its output. Delete removes that run's files; its attempt counts stay in the engagement ledger.</p>
+        <ul class="runs-list" id="runs-list" aria-label="Previous runs"></ul>
+      </section>
+      <section class="card">
         <h3>Live timeline</h3>
         <ol class="timeline" id="timeline"></ol>
       </section>
@@ -229,7 +232,8 @@
   </main>
 
   <footer class="footer">
-    Loopback only. Credential values, default passwords and flag values are never shown here.
+    Loopback only. Default passwords and flag values are never shown here. Recovered literal values appear only in the
+    private view (started with <code>--reveal-recovered</code>).
     Run data lives in <code>runs/&lt;run-id&gt;/</code>.
   </footer>
 </body>

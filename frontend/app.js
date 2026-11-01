@@ -15,17 +15,22 @@
     { id: "attack-path-and-report", label: "Attack path & report", phase: "threat_modeling" },
   ];
   const AGENTS = ["discovery-agent", "network-agent", "web-agent", "binary-agent"];
+  // The run on screen survives a reload under this key. "" means the screen was cleared; no key means a first visit.
+  const VIEW_KEY = "mitigata.view";
   const state = {
     token: "",
     status: null,
     runs: [],
-    runId: "",
+    runId: "",          // the run on screen; "" is an empty screen
     view: null,
     report: null,
     reportKey: "",
     job: { state: "idle" },
+    followJob: "",      // started_at of a scan whose run this page shows once it exists ("" when none)
+    announced: "",      // finish time of the last job whose result is already in the notice
     pollTimer: null,
   };
+  const drawn = new Map();  // last HTML drawn into each panel that refreshes often, so an unchanged panel is not rebuilt
   const $ = (selector) => document.querySelector(selector);
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -52,7 +57,9 @@
     const data = type.includes("application/json") ? await response.json() : await response.text();
     if (!response.ok) {
       const message = typeof data === "string" ? data : data.error || data.detail || `HTTP ${response.status}`;
-      throw new Error(message);
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
     }
     return data;
   }
@@ -64,7 +71,14 @@
     box.textContent = message || "";
   }
 
-  // -- status, tools, runs -----------------------------------------------------------
+  // Rebuilds a panel only when its content changed, so a click on it is not lost to a redraw and open details stay open.
+  function draw(selector, html) {
+    if (drawn.get(selector) === html) return;
+    drawn.set(selector, html);
+    $(selector).innerHTML = html;
+  }
+
+  // -- status, tools -----------------------------------------------------------------------
   async function loadStatus() {
     state.status = await api("/api/status");
     state.token = state.status.action_token || state.token;
@@ -94,6 +108,7 @@
       chips.push(`<span class="chip bad">${esc(scope.message || "no scope")}</span>`);
     }
     chips.push(`<span class="chip">enforcement: ${esc(state.status.enforcement)}</span>`);
+    if (state.status.reveal_recovered) chips.push('<span class="chip warn">private view: recovered values shown</span>');
     $("#chips").innerHTML = chips.join("");
   }
 
@@ -110,20 +125,46 @@
       </tr>`).join("")}</table>` : '<p class="empty">Tool detection unavailable.</p>';
   }
 
+  // -- previous runs and the screen -------------------------------------------------------------
   async function loadRuns() {
     const data = await api("/api/runs");
     state.runs = data.runs;
-    const select = $("#run-select");
-    const current = state.runId;
-    select.innerHTML = state.runs.length
-      ? state.runs.map((run) => `<option value="${esc(run.id)}">${esc(run.id)} · ${esc(run.status)}</option>`).join("")
-      : '<option value="">no runs yet</option>';
-    if (!state.runs.length) {
-      state.runId = "";
-      return;
+    renderRuns();
+  }
+
+  function storedView() {
+    try {
+      return window.localStorage.getItem(VIEW_KEY);
+    } catch (_error) {
+      return null;
     }
-    state.runId = state.runs.some((run) => run.id === current) ? current : state.runs[0].id;
-    select.value = state.runId;
+  }
+
+  // Remembers the run on screen, so a reload shows the same screen. Blocked storage only loses that memory.
+  function showRun(runId) {
+    state.runId = runId;
+    renderRuns();  // the highlight follows the run on screen
+    try {
+      window.localStorage.setItem(VIEW_KEY, runId);
+    } catch (_error) {
+      // nothing to do: the screen starts from the newest run after a reload
+    }
+  }
+
+  // First visit: the newest run. Later visits: the stored run, or an empty screen if it was cleared or is gone.
+  function initialRun() {
+    const stored = storedView();
+    if (stored === null) return state.runs.length ? state.runs[0].id : "";
+    return state.runs.some((run) => run.id === stored) ? stored : "";
+  }
+
+  // Empties the screen. Nothing is deleted: the runs stay in Previous runs.
+  function blankScreen() {
+    showRun("");
+    state.view = null;
+    state.report = null;
+    state.reportKey = "";
+    renderEmpty();
   }
 
   async function loadRun() {
@@ -132,9 +173,28 @@
       renderEmpty();
       return;
     }
-    state.view = await api(`/api/runs/${encodeURIComponent(state.runId)}`);
-    const key = `${state.runId}:${state.view.run.status}`;
-    if (state.view.reports.json && state.reportKey !== key) {
+    let view;
+    try {
+      view = await api(`/api/runs/${encodeURIComponent(state.runId)}`);
+    } catch (error) {
+      if (error.status !== 404) throw error;
+      if (jobRunning() && state.job.run_id === state.runId) {
+        // The scan's run is still being created: the screen stays empty until its record exists.
+        state.view = null;
+        renderEmpty();
+        return;
+      }
+      blankScreen();
+      notice("The run on screen no longer exists, so the screen was cleared.", "error");
+      return;
+    }
+    state.view = view;
+    if (!view.reports.json) {
+      state.report = null;
+      state.reportKey = "";
+    }
+    const key = `${state.runId}:${view.run.status}`;
+    if (view.reports.json && state.reportKey !== key) {
       state.report = await api(`/api/runs/${encodeURIComponent(state.runId)}/report/json`);
       state.reportKey = key;
     }
@@ -143,9 +203,11 @@
 
   async function pollJob() {
     state.job = await api("/api/job");
-    if (state.job.run_id && state.job.run_id !== state.runId) {
-      state.runId = state.job.run_id;
-      await loadRuns();
+    // The run of a scan this page started is shown once, when it first exists. A scan that has already finished by
+    // the first look is shown too. An older job's snapshot never matches, so it cannot pull a cleared screen back.
+    if (state.followJob && state.job.started_at === state.followJob && state.job.run_id) {
+      state.followJob = "";
+      showRun(state.job.run_id);
     }
   }
 
@@ -159,17 +221,26 @@
     state.pollTimer = setTimeout(tick, busy ? 1500 : 8000);
   }
 
+  // A finished job's result is shown once, not on every refresh.
+  function announceJob() {
+    const job = state.job;
+    if (!job.finished_at || job.finished_at === state.announced) return;
+    if (job.state === "error" || job.state === "refused") {
+      state.announced = job.finished_at;
+      notice(job.error || "The job did not start.", "error");
+    } else if (job.state === "done") {
+      state.announced = job.finished_at;
+      notice(`${job.kind === "discover" ? "Discovery" : "Scan"} finished: ${job.status || "done"}.`);
+    }
+  }
+
   async function tick() {
     try {
       await pollJob();
       await loadStatus();
       await loadRuns();
       await loadRun();
-      if (state.job.state === "error" || state.job.state === "refused") {
-        notice(state.job.error || "The job did not start.", "error");
-      } else if (state.job.state === "done") {
-        notice(`${state.job.kind || "Job"} finished: ${state.job.status || "done"}.`);
-      }
+      announceJob();
     } catch (error) {
       notice(`Dashboard could not refresh: ${error.message}`, "error");
     } finally {
@@ -178,9 +249,12 @@
   }
 
   // -- actions -----------------------------------------------------------------------------
+  // Run: a fresh discovery of the range. The screen starts empty and fills in as the scan proceeds.
   async function startDiscovery(event) {
     event.preventDefault();
+    const previous = state.runId;
     $("#discover-btn").disabled = true;
+    blankScreen();
     try {
       state.job = await api("/api/discover", {
         method: "POST", token: true,
@@ -190,12 +264,16 @@
           range: $("#range-input").value.trim() || null,
         },
       });
-      notice("Discovery started. Alive hosts appear in step 2 when it finishes.");
+      state.followJob = state.job.started_at || "";  // the server accepted this scan: show its run when it exists
+      notice("Discovery started. Values appear on this screen as the scan proceeds.");
+      $("#target-ip").value = "";
+      if (state.job.run_id) showRun(state.job.run_id);
       await loadRuns();
-      if (state.job.run_id) state.runId = state.job.run_id;
       await loadRun();
     } catch (error) {
       notice(error.message, "error");
+      showRun(previous);  // a refused start leaves the previous screen as it was
+      await loadRun().catch(() => {});
     } finally {
       await loadStatus().catch(() => {});
       scheduleNext();
@@ -238,15 +316,53 @@
     }
   }
 
+  // Opening a run from the list shows its output; a scan that is still running keeps going in the background.
+  async function openRun(runId) {
+    state.followJob = "";
+    showRun(runId);
+    await loadRun().catch((error) => notice(error.message, "error"));
+  }
+
+  // Clear: empties the screen so it looks like a fresh start. The runs stay in Previous runs.
+  function clearScreen() {
+    state.followJob = "";
+    blankScreen();
+    $("#target-ip").value = "";
+    renderControls();
+    notice(jobRunning()
+      ? "Screen cleared. The running scan continues; open it from Previous runs to follow it."
+      : "Screen cleared. Previous runs stay in the list, and Run starts a fresh scan.");
+  }
+
+  // Delete one previous run. The server keeps its attempt counts in the engagement ledger and refuses a running run.
+  async function deleteRun(runId) {
+    const run = state.runs.find((item) => item.id === runId);
+    if (!run || run.status === "running") return;
+    const message = `Delete run ${runId}? Its files are removed. Its credential-attempt counts stay in the engagement ledger, so the attempt cap still holds.`;
+    if (!window.confirm(message)) return;
+    try {
+      await api(`/api/runs/${encodeURIComponent(runId)}`, { method: "DELETE", token: true });
+      notice(`Deleted ${runId}. Its attempt counts are kept in the engagement ledger.`);
+      if (state.runId === runId) {
+        blankScreen();
+        $("#target-ip").value = "";
+      }
+      await loadRuns();
+    } catch (error) {
+      notice(error.message, "error");
+    }
+  }
+
   function renderControls() {
     const scope = state.status.scope;
     const ready = scope.state === "valid" && scope.window_open;
     const busy = jobRunning();
     $("#discover-btn").disabled = !ready || busy;
-    let discoverHint = "";
+    $("#clear-btn").disabled = !state.runId;
+    let discoverHint = "Press Run in the top bar to start a fresh discovery of this range.";
     if (scope.state !== "valid") discoverHint = "Start the server with --scope to enable scans.";
     else if (!scope.window_open) discoverHint = "The authorisation window is closed.";
-    else if (busy) discoverHint = "A job is running.";
+    else if (busy) discoverHint = "A scan is running. Its values appear on this screen as it proceeds.";
     $("#discover-hint").textContent = discoverHint;
 
     const ip = $("#target-ip").value.trim();
@@ -271,23 +387,22 @@
   // -- rendering -----------------------------------------------------------------------------
   function renderEmpty() {
     $("#stepper").innerHTML = DISCOVER_STAGES.map((stage) => `<li class="pending"><b>${esc(stage.label)}</b>waiting</li>`).join("");
-    $("#phase-tag").textContent = "no run yet";
-    ["#alive-list", "#board-hosts", "#board-endpoints", "#board-binaries", "#board-lineage", "#board-creds", "#board-findings",
+    $("#phase-tag").textContent = jobRunning() ? "starting" : "no run yet";
+    const blank = '<p class="empty">Nothing to show yet.</p>';
+    draw("#alive-list", blank);
+    draw("#board-binaries", blank);
+    ["#board-hosts", "#board-endpoints", "#board-lineage", "#board-creds", "#board-findings",
       "#verify-list", "#path-list", "#timeline", "#coverage", "#gaps", "#limitations"].forEach((id) => {
-      $(id).innerHTML = '<p class="empty">Nothing to show yet.</p>';
+      $(id).innerHTML = blank;
     });
     $("#guard-kv").innerHTML = "";
     $("#downloads").innerHTML = "";
     $("#mermaid").textContent = "";
+    $("#deadline-fill").style.width = "0%";
+    $("#deadline-text").textContent = "";
+    document.querySelectorAll(".agent").forEach((card) => card.classList.remove("active"));
     renderAgents(null);
     renderControls();
-  }
-
-  function renderDeleteButton() {
-    const button = $("#delete-run-btn");
-    if (!button) return;
-    const running = Boolean(state.view && state.view.run && state.view.run.status === "running");
-    button.disabled = !state.runId || running;
   }
 
   function renderAll() {
@@ -305,7 +420,6 @@
     renderTimeline(state.view);
     renderCoverage(state.view);
     renderGaps();
-    renderDeleteButton();
     document.querySelectorAll(".agent").forEach((card) => {
       const active = state.view && state.view.run.status === "running" && state.view.agents.some(
         (agent) => agent.agent === card.dataset.agent && (agent.states.running || 0) > 0);
@@ -395,16 +509,10 @@
   function renderAlive(view) {
     const hosts = view.hosts || [];
     const rows = hosts.filter((host) => host.ports.length || host.source);
-    $("#alive-list").innerHTML = rows.length
+    draw("#alive-list", rows.length
       ? rows.map((host) => `<button type="button" class="alive" data-ip="${esc(host.ip)}">
           <b>${esc(host.ip)}</b><span>${esc(host.ports.length)} open</span></button>`).join("")
-      : '<p class="empty">No alive hosts yet. Run discovery first.</p>';
-    document.querySelectorAll(".alive").forEach((button) => {
-      button.addEventListener("click", () => {
-        $("#target-ip").value = button.dataset.ip;
-        renderControls();
-      });
-    });
+      : '<p class="empty">No alive hosts yet. Run discovery first.</p>');
   }
 
   function renderBoard(view) {
@@ -438,13 +546,20 @@
 
   function renderBinaries(view) {
     const items = view.binaries || [];
-    $("#board-binaries").innerHTML = items.length
-      ? items.map((item) => binaryCard(item)).join("")
-      : '<p class="empty">No binary yet. Supplied binaries are analysed from the binaries folder; the web agent also downloads ELF or PE links it finds on the target.</p>';
+    draw("#board-binaries", items.length
+      ? items.map((item) => binaryCard(item, view.recovered || [])).join("")
+      : '<p class="empty">No binary yet. Supplied binaries are analysed from the binaries folder; the web agent also downloads ELF or PE links it finds on the target.</p>');
   }
 
-  function binaryCard(item) {
+  function binaryCard(item, recovered = []) {
     const d = item.details || {};
+    // Private view only: the server sends values when it runs with --reveal-recovered. They stay behind a click.
+    const values = recovered.filter((entry) => String(entry.source || "").startsWith(`binary:${item.sha256}`));
+    const revealed = values.map((entry) => {
+      const offset = String(entry.source).split(":").pop();
+      const where = offset === "-1" ? "found by the solver" : `static literal at offset ${offset}`;
+      return `${esc(entry.ref)} · ${esc(entry.kind)} · ${esc(where)}\n${esc(entry.value)}`;
+    }).join("\n\n");
     const p = d.protections || {};
     const a = d.analysis || {};
     const s = d.solver || {};
@@ -463,10 +578,11 @@
       <p><b>Analysis</b> ${esc(analysis)} · ${esc(a.functions ?? 0)} functions · ${esc(a.decompiled_functions ?? 0)} decompiled</p>
       ${errors ? `<ul>${errors}</ul>` : ""}
       <p><b>Protections</b> ${esc(protections)} · <b>Unsafe imports</b> ${esc(unsafe)}</p>
-      <p><b>Literals</b> ${esc(d.literal_count ?? 0)} recovered (values are never shown) · <b>Solver</b> ${solver}</p>
+      <p><b>Literals</b> ${esc(d.literal_count ?? 0)} recovered (values are never shown, except in the private view) · <b>Solver</b> ${solver}</p>
       <details><summary>Functions (${esc((dc.functions || []).length)})</summary><pre>${esc((dc.functions || []).join("\n") || "(none)")}</pre></details>
       <details><summary>Decompiled code (excerpt)</summary><pre>${esc(dc.decompiled || "(none)")}</pre></details>
       <details><summary>Disassembly of main (radare2)</summary><pre>${esc((dc.main_listing || []).join("\n") || "(none)")}</pre></details>
+      ${values.length ? `<details class="private"><summary>Recovered value (private view, click to show)</summary><pre>${revealed}</pre></details>` : ""}
     </article>`;
   }
 
@@ -519,6 +635,8 @@
         <div class="small wrap">${esc(targetOf(item))}</div>
         <p>${esc(item.summary || item.claim)}</p>
         ${item.oracle ? `<p><b>oracle:</b> ${esc(item.oracle)} · <b>control:</b> ${esc(item.control || "–")}</p>` : ""}
+        ${item.state !== "rejected" && item.fix ? `<p class="fix"><b>Fix:</b> ${esc(item.fix)}</p>
+        <p class="fix-check"><b>How to check:</b> ${esc(item.fix_check)}</p>` : ""}
       </div>`).join("");
   }
 
@@ -574,35 +692,59 @@
       : '<li class="muted">Limitations appear here when a scan completes.</li>';
   }
 
+  // One row per previous run: Open shows it, Delete removes its files. A running run cannot be deleted.
+  function runRow(run) {
+    const current = run.id === state.runId;
+    const running = run.status === "running";
+    const counts = `${run.counts.hosts} hosts · ${run.counts.confirmed} confirmed`;
+    return `<li class="run-row${current ? " current" : ""}">
+      <button type="button" class="run-open" data-open="${esc(run.id)}" aria-current="${current ? "true" : "false"}">
+        <b>${esc(run.id)}</b>
+        <span class="badge">${esc(run.status)}</span>
+        <small class="muted">${esc(when(run.started_at))} · ${esc(counts)}</small>
+      </button>
+      <button type="button" class="danger-btn" data-delete="${esc(run.id)}"${running ? " disabled" : ""}
+        title="${running ? "This run is still in progress." : "Deletes this run's files. Its attempt counts stay in the engagement ledger."}"
+        aria-label="Delete ${esc(run.id)}">Delete</button>
+    </li>`;
+  }
+
+  function renderRuns() {
+    draw("#runs-list", state.runs.length
+      ? state.runs.map((run) => runRow(run)).join("")
+      : '<li class="empty">No previous runs yet. Press Run to start one.</li>');
+  }
+
   // -- wiring -----------------------------------------------------------------------------------
   document.addEventListener("DOMContentLoaded", async () => {
     $("#discover-form").addEventListener("submit", startDiscovery);
     $("#target-form").addEventListener("submit", startTarget);
     $("#target-ip").addEventListener("input", renderControls);
-    $("#run-select").addEventListener("change", async (event) => {
-      state.runId = event.target.value;
-      await loadRun();
+    $("#clear-btn").addEventListener("click", clearScreen);
+    $("#alive-list").addEventListener("click", (event) => {
+      const button = event.target.closest(".alive");
+      if (!button) return;
+      $("#target-ip").value = button.dataset.ip;
+      renderControls();
     });
-    $("#delete-run-btn").addEventListener("click", async () => {
-      const runId = state.runId;
-      if (!runId) return;
-      const message = `Delete run ${runId}? Its files are removed. Its credential-attempt counts stay in the engagement ledger, so the attempt cap still holds.`;
-      if (!window.confirm(message)) return;
-      try {
-        await api(`/api/runs/${encodeURIComponent(runId)}`, { method: "DELETE", token: true });
-        notice(`Deleted ${runId}. Its attempt counts are kept in the engagement ledger.`);
-        state.runId = "";
-        state.view = null;
-        await loadRuns();
-        await loadRun();
-      } catch (error) {
-        notice(error.message, "error");
+    $("#runs-list").addEventListener("click", (event) => {
+      const remove = event.target.closest("[data-delete]");
+      if (remove) {
+        deleteRun(remove.dataset.delete);
+        return;
       }
+      const open = event.target.closest("[data-open]");
+      if (open) openRun(open.dataset.open);
     });
     try {
       await loadStatus();
       await pollJob();
+      // A scan that is already running is followed on this page. An old result is not repeated in the notice.
+      state.followJob = jobRunning() ? state.job.started_at || "" : "";
+      state.announced = state.job.finished_at || "";
       await loadRuns();
+      if (state.followJob) showRun(state.job.run_id || "");
+      else showRun(initialRun());
       await loadRun();
     } catch (error) {
       notice(`Could not reach the MITIGATA server: ${error.message}`, "error");

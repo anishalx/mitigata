@@ -48,7 +48,9 @@ One-shot alternative (discovery plus the focus host in one run): `.venv/bin/miti
 .venv/bin/mitigata serve --scope scope-hackathon.yaml --out runs --port 8765
 ```
 
-Open http://127.0.0.1:8765/: **1 · Discover alive hosts**, then **2 · Choose a target IP**, then **Scan this IP**.
+Open http://127.0.0.1:8765/: enter the range in **1 · Discover alive hosts** and press **Run** in the top bar. Then
+pick a host in **2 · Choose a target IP** and press **Scan this IP**. **Clear** empties the screen without deleting
+anything; **Previous runs** opens or deletes a run one at a time.
 The form accepts an explicit port list, extra authentication hosts, and can disable the full 65,535-port sweep
 (useful for a fast check). The tools panel shows what is installed and what each agent falls back to.
 

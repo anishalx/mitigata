@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field, field_validator
 from ..config import ConfigError, load_manifest
 from ..discovery import resolve_range
 from ..pipeline import engagement
+from ..pipeline.remediation import remedy_for
 from ..models import utcnow
 from ..pipeline import HuntOptions, HuntRefused, run_hunt
 from ..pipeline import tools as pipeline_tools
@@ -332,12 +333,14 @@ def _candidates(conn: sqlite3.Connection, run_id: str, asset_id: int | None = No
     for row in conn.execute(query + " ORDER BY c.id", params):
         details = json.loads(row["details_json"] or "{}")
         payload = json.loads(row["payload"] or "{}") if row["payload"] else {}
+        remedy = remedy_for(row["vuln_class"])
         rows.append({
             "id": row["id"], "class": row["vuln_class"], "state": row["state"], "claim": row["claim"],
             "ptes_phase": row["ptes_phase"], "asset_id": row["asset_id"], "service_id": row["service_id"],
             "details": {key: details[key] for key in CANDIDATE_DETAIL_KEYS if key in details},
             "oracle": row["oracle"] or "", "control": row["control_kind"] or "",
             "summary": payload.get("summary", ""), "attempts": payload.get("attempts", 0),
+            "fix": remedy.fix, "fix_check": remedy.check,
         })
     return rows
 
@@ -352,8 +355,33 @@ def _attack_paths(out_dir: Path, run_id: str) -> dict[str, Any]:
         return {"paths": [], "mermaid": ""}
 
 
+def _recovered_values(out_dir: Path, run_id: str) -> list[dict[str, Any]]:
+    """Private view only: the literal values a run recovered, read from its private secrets file (mode 0600)."""
+    if not RUN_ID.fullmatch(run_id):
+        return []
+    path = out_dir / run_id / "secrets.json"
+    if not path.is_file() or path.is_symlink():
+        return []
+    try:
+        values = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(values, dict):
+        return []
+    with _run_db(out_dir, run_id) as conn:
+        if conn is None:
+            return []
+        rows = conn.execute(
+            "SELECT secret_ref, kind, source FROM credentials WHERE run_id=? ORDER BY id", (run_id,)).fetchall()
+    return [
+        {"ref": row["secret_ref"], "kind": row["kind"], "source": row["source"], "value": values[row["secret_ref"]]}
+        for row in rows if isinstance(values.get(row["secret_ref"]), str)
+    ]
+
+
 def create_app(
     *, out_dir: Path, scope_path: Path | None, port: int, token: str | None = None,
+    reveal_recovered: bool = False,
 ) -> FastAPI:
     out_dir = out_dir.resolve()
     token = token or secrets.token_urlsafe(24)
@@ -435,6 +463,7 @@ def create_app(
             "runs": len(list_runs(out_dir)),
             "reconciled_runs": getattr(app.state, "reconciled_runs", []),
             "enforcement": "host_guard_in_process",
+            "reveal_recovered": reveal_recovered,
         }
 
     @app.post("/api/hunt", status_code=202)
@@ -560,6 +589,8 @@ def create_app(
         view = run_view(out_dir, run_id)
         if view is None:
             return PlainTextResponse("Not found", status_code=404)
+        if reveal_recovered:  # the private view: values only when the operator started the server with the flag
+            view["recovered"] = _recovered_values(out_dir, run_id)
         return JSONResponse(view)
 
     @app.delete("/api/runs/{run_id}")

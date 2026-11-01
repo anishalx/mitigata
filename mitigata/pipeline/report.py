@@ -15,18 +15,8 @@ from typing import Any
 
 from ..store import Store
 from . import attack_path
+from .remediation import remedy_for
 
-FIXES: dict[str, str] = {
-    "default_credentials": "Replace default credentials, enforce unique strong passwords, add lockout or rate limiting and MFA for administrative logins.",
-    "passkey_protocol_auth": "Do not ship authentication secrets inside distributed binaries; load them from a secret store, rotate the exposed value and rate-limit AUTH attempts.",
-    "raw_html_reflection": "HTML-encode reflected parameters in their output context and add a Content-Security-Policy.",
-    "trusted_header_bypass": "Decide trust from the TCP peer address (for example an allowlist of proxy addresses), never "
-                             "from a client-controlled header; ignore forwarded headers from untrusted peers.",
-    "exposed_path": "Restrict or remove the path (authentication plus network ACL) and delete backup, debug and version-control artefacts from the web root.",
-    "information_disclosure_banner": "Minimise pre-authentication banners; do not describe the authentication protocol or where its secret lives.",
-    "hardcoded_secret": "Remove credentials from binaries, rotate any value that was exposed, and read secrets at runtime from protected storage.",
-    "static_unsafe_function": "Replace unbounded libc calls (gets, strcpy, sprintf, system) with bounded alternatives and confirm reachability with dynamic testing.",
-}
 PHASE_ORDER = (
     "pre_engagement", "intelligence_gathering", "threat_modeling", "vulnerability_analysis",
     "exploitation", "post_exploitation", "reporting",
@@ -72,6 +62,7 @@ def build_model(store: Store, run_id: str, meta: dict[str, Any], *, include_flag
     for candidate in snapshot["candidates"]:
         verdict = (candidate["verdict"] or {}).get("verdict") or "candidate"
         details = candidate["details"]
+        remedy = remedy_for(candidate["class"])
         findings.append({
             "id": candidate["id"],
             "class": candidate["class"],
@@ -83,7 +74,8 @@ def build_model(store: Store, run_id: str, meta: dict[str, Any], *, include_flag
             "control": (candidate["verdict"] or {}).get("control_kind", ""),
             "summary": candidate["payload"].get("summary", ""),
             "evidence": _public_payload(candidate["payload"], include_flags),
-            "fix": FIXES.get(candidate["class"], "Review the evidence and apply the vendor guidance for this class."),
+            "fix": remedy.fix,
+            "fix_check": remedy.check,
         })
 
     services = [{"ip": s["ip"], "port": s["port"], "name": s["name"], "product": s["product"],
@@ -192,20 +184,22 @@ def render_markdown(model: dict[str, Any]) -> str:
             continue
         groups.setdefault((item["class"], item["state"], item["summary"] or item["claim"]), []).append(item)
     for (klass, state, text), items in groups.items():
+        fix = _lead_fix(klass, state)
         if len(items) == 1:
-            lines.append(f"- **{klass}** on `{items[0]['target']}` — {state}: {text} ({items[0]['ptes_phase']})")
+            lines.append(f"- **{klass}** on `{items[0]['target']}` — {state}: {text} ({items[0]['ptes_phase']}){fix}")
         else:
             examples = ", ".join(f"`{entry['target']}`" for entry in items[:3])
             more = " …" if len(items) > 3 else ""
-            lines.append(f"- **{klass}** × {len(items)} — {state}: {text}. Examples: {examples}{more} ({items[0]['ptes_phase']})")
+            lines.append(f"- **{klass}** × {len(items)} — {state}: {text}. Examples: {examples}{more} ({items[0]['ptes_phase']}){fix}")
     if literal_leads:
         n_accepted = sum(1 for item in literal_leads if item["state"] == "confirmed")
         n_rejected = sum(1 for item in literal_leads if item["state"] == "rejected")
         n_open = len(literal_leads) - n_accepted - n_rejected
+        fix = _lead_fix("hardcoded_secret", "inconclusive", " ") if n_open else ""
         lines.append(
             f"- **hardcoded_secret** — {len(literal_leads)} static literal(s) recovered from target binaries or readable "
             f"content: {n_accepted} accepted by a live authentication surface, {n_rejected} not accepted by any surface "
-            f"that was tested, {n_open} not tested. Values are withheld from reports."
+            f"that was tested, {n_open} not tested. Values are withheld from reports.{fix}"
         )
     lines += ["", "## Hosts and services", "", "| Host | Port | Service | Product / version |", "|---|---|---|---|"]
     for service in model["services"]:
@@ -231,6 +225,13 @@ def render_markdown(model: dict[str, Any]) -> str:
 
 def _cell(value: Any) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def _lead_fix(finding_class: str, state: str, separator: str = " — ") -> str:
+    """The fix sentence for a lead that is still open. A rejected lead needs no fix."""
+    if state == "rejected":
+        return ""
+    return f"{separator}Fix: {remedy_for(finding_class).fix}"
 
 
 _EVIDENCE_SKIP = frozenset({"probe_reply_excerpt", "summary", "oracle", "control", "accepted_refs",
@@ -260,6 +261,7 @@ def _finding_block(item: dict[str, Any]) -> list[str]:
         "- **Evidence:**",
         *_evidence_lines(item["evidence"]),
         f"- **Fix:** {item['fix']}",
+        f"- **How to check the fix:** {item['fix_check']}",
         "",
     ]
 
